@@ -4,17 +4,22 @@ import lombok.extern.slf4j.Slf4j;
 import marray.top.mhtml.Enum.IMhtmlPartEnum;
 import marray.top.mhtml.Enum.IMhtmlScretEnum;
 import marray.top.mhtml.constant.IMhtmlConstants;
+import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.reflect.MethodUtils;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * @author ：wangsiliang
+ * @author ：feiyu
  * @date ：Created in 2020/11/4 15:34
  * @description：解析mhtml格式或者mht文件的工具类
  * @modified By：
@@ -48,9 +53,28 @@ public class IMhtmlParas implements IMhtmlConstants {
      */
     private static final Pattern contentLocation = Pattern.compile(CONTENT_LOCATION_REGEX);
 
+    /**
+     * 验证Content-Location|Content-ID是否存在的正则工具，并通过Content-Location|Content-ID去决定是否是属于
+     * mhtml的内容
+     */
     private static final Pattern partSign = Pattern.compile(PART_SIGN);
 
 
+    /**
+     * CONTENT_ID对应的正则表达式
+     */
+    private static final Pattern contentId = Pattern.compile(CONTENT_ID);
+    /**
+     * Content-Type:image/*
+     */
+    private static final Pattern contentTypeImage = Pattern.compile(IMAGE_REGEX);
+
+    private static final Pattern contentType = Pattern.compile(CONTENT_TYPE);
+
+
+    /**
+     * 经过处理后的各部分
+     */
     public List<String> boundaryParts = new ArrayList<String>(0);
 
     public boolean isinit = false;
@@ -138,16 +162,12 @@ public class IMhtmlParas implements IMhtmlConstants {
                 list.addAll(findType(CSS_REGEX));
                 break;
             case GIF:
-                list.addAll(findType(GIF_REGEX));
-                break;
             case PNG:
-                list.addAll(findType(PNG_REGEX));
+            case JPEG:
+                list.addAll(findType(IMAGE_REGEX));
                 break;
             case HTML:
                 list.addAll(findType(HTML_REGEX));
-                break;
-            case JPEG:
-                list.addAll(findType(JPEG_REGEX));
                 break;
             default:
                 log.warn("无知类型");
@@ -171,7 +191,6 @@ public class IMhtmlParas implements IMhtmlConstants {
             Matcher matcher = pattern.matcher(boundaryPart);
 
             if (matcher.find()) {
-
                 list.add(reductionContent(boundaryPart));
             }
 
@@ -189,9 +208,28 @@ public class IMhtmlParas implements IMhtmlConstants {
      */
     private String reductionContent(String group) {
 
+        //首先获取png的还原
+        String result = doDealContentTypePng(group);
+
+        if (StringUtils.isBlank(result)) {
+            result = doDealCssOrHtml(group);
+        }
+
+        return result;
+
+    }
+
+    /**
+     * 处理content-type为text/html或text/css
+     *
+     * @param group 全部内容
+     * @return 原本内容
+     */
+    private String doDealCssOrHtml(String group) {
+
 
         //获取编码格式
-        String content = getType(group);
+        String content = getContentTransferEncoding(group);
 
         String part = getPartContent(group);
 
@@ -216,7 +254,61 @@ public class IMhtmlParas implements IMhtmlConstants {
             throw new RuntimeException("执行加密返回异常");
         }
 
+    }
 
+    private String getContentType(String group) throws Exception {
+
+        Matcher matcher = contentType.matcher(group);
+
+        String content = null;
+        while (matcher.find()) {
+            if (StringUtils.isBlank(content)) {
+                content = matcher.group();
+            } else {
+                throw new RuntimeException(String.format("%s不是规范的mhtml内容，因为包含多个Content-Type:xxxx/xxx"));
+            }
+
+        }
+        if (StringUtils.isBlank(content)) {
+            throw new Exception(String.format("%s不是规范的mhtml内容，因为包含多个Content-Type:xxxx/xxx"));
+        }
+
+        return content.substring(content.indexOf(":") + 1);
+    }
+
+
+    /**
+     * 获取image/*的内容
+     *
+     * @param group
+     * @return
+     */
+    private String doDealContentTypePng(String group) {
+
+        String[] content = group.split(IMAGE_REGEX);
+        if (content.length == 1) {
+            log.warn("{}不是image/*类型", group);
+        } else if (content.length != 2) {
+            log.warn("{}不是规范的image/*内容，因为包含多个image/*");
+
+        } else {
+            try {
+                String contentType = getContentType(group);
+                String bm = getContentTransferEncoding(group);
+                Class screat = IMhtmlScretEnum.getScretInstance(bm);
+                if (screat.equals(Base64.class)) {
+                    String image = String.format("data:%s;base64,", contentType, getPartContent(group));
+                    return image;
+                } else {
+                    throw new RuntimeException(String.format("%s 不是base64内容，请介入处理", group));
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(String.format("%s 不是规范的image/*内容", group));
+            }
+
+        }
+
+        return null;
     }
 
     /**
@@ -246,7 +338,7 @@ public class IMhtmlParas implements IMhtmlConstants {
      * @param group
      * @return
      */
-    private String getLocation(String group) {
+    private String getLocation(String group) throws Exception {
 
         Matcher matcher = contentLocation.matcher(group);
 
@@ -259,7 +351,7 @@ public class IMhtmlParas implements IMhtmlConstants {
             }
         }
         if (StringUtils.isBlank(content)) {
-            throw new RuntimeException("非规范的mhtml文件,未发现符合条件的Content-Location");
+            throw new Exception("非规范的mhtml文件,未发现符合条件的Content-Location");
         }
 
         int i = content.indexOf(":");
@@ -275,7 +367,7 @@ public class IMhtmlParas implements IMhtmlConstants {
      * @param line
      * @return
      */
-    private String getType(String line) {
+    private String getContentTransferEncoding(String line) {
 
         Matcher matcher = contentTransferEncodingPattern.matcher(line);
         String content = null;
@@ -310,6 +402,207 @@ public class IMhtmlParas implements IMhtmlConstants {
 
         result = result.split("\"")[1];
         return result;
+
+    }
+
+
+    /**
+     * 将内容转换成html
+     *
+     * @return
+     */
+    public String convet2Html() {
+
+        //校验是否初始化
+        if (!isinit) {
+            throw new RuntimeException("获取异常，请先初始化数据");
+        }
+        //转换数据==对各部分进行处理，并生成
+        List<String> copyBoundaryParts = new ArrayList<String>(boundaryParts);
+        Map<String, String> partMap = convertBoundary2Map(copyBoundaryParts);
+        //
+        Set<Map.Entry<String, String>> entrySet = partMap.entrySet();
+        //先处理css、图片等资源
+        for (Map.Entry<String, String> entry : entrySet) {
+            String value = entry.getValue();
+            for (Map.Entry<String, String> entry1 : entrySet) {
+                if (value.contains(entry1.getKey())) {
+                    //先处理css
+                    if (StringUtils.deleteWhitespace(entry1.getKey()).startsWith("cid:") && entry1.getKey().contains("fram")
+                            && value.contains(entry1.getKey())) {
+                        //css处理
+                        StringBuilder all = new StringBuilder();
+                        String key = entry1.getValue();
+                        StringBuilder builder = new StringBuilder("<style type=\"text/css\">");
+                        builder.append(key);
+                        builder.append("</style>");
+                        StringBuilder builder1 = new StringBuilder();
+                        all.append(value.substring(0, value.indexOf(entry1.getKey())));
+                        String re = value.substring(value.indexOf(entry1.getKey()));
+                        int i = re.indexOf(">");
+                        builder1.append(re);
+                        builder1.insert(i + 1, builder);
+                        all.append(builder1);
+                        partMap.remove(entry1.getKey());
+                        partMap.put(entry.getKey(), all.toString());
+                    }
+
+                }
+            }
+
+        }
+
+        //在处理html
+        for (Map.Entry<String, String> entry : entrySet) {
+            String value = entry.getValue();
+            for (Map.Entry<String, String> entry1 : entrySet) {
+                if (value.contains(entry1.getKey())) {
+                    if (StringUtils.deleteWhitespace(entry1.getKey()).startsWith("frame")) {
+                        String mValue = value.substring(value.indexOf(entry1.getKey()));
+                        int index = mValue.indexOf("</iframe>");
+                        StringBuilder newStr = new StringBuilder(mValue);
+                        newStr.insert(index, entry1.getValue());
+                        partMap.remove(entry1.getKey());
+                        partMap.put(entry.getKey(), newStr.toString());
+                    }
+
+                }
+            }
+
+        }
+
+        StringBuilder stringBuilder = new StringBuilder();
+        for (String p : partMap.values()) {
+
+            if (p.contains("<!DOCTYPE html>")) {
+                stringBuilder.append(p);
+            }
+        }
+
+        return stringBuilder.toString();
+
+    }
+
+    /**
+     * 将mhtml的各部分文件
+     * 转换成key为Content-ID，value为其内容的值,只有该值才是会被放入html里的
+     * 各部分的内容，首先会被检测contentID，然后才会被检测Content-Location
+     *
+     * @param copyBoundaryParts mhtml的内容集合
+     * @return key为Content-ID、Content-Location，value为内容的map
+     */
+    private Map<String, String> convertBoundary2Map(List<String> copyBoundaryParts) {
+
+        //创建一个总集合
+        Map<String, String> boundaryMaps = new HashMap<String,String>();
+        //处理contentID
+        doDealContentId(copyBoundaryParts, boundaryMaps);
+        doDealContentLocation(copyBoundaryParts, boundaryMaps);
+        return boundaryMaps;
+
+    }
+
+    /**
+     * 遍历{@code copyBoundaryParts}的内容，寻找到所有存在着Content-Location的part，放入{@code boundaryMaps}里
+     *
+     * @param copyBoundaryParts
+     * @param boundaryMaps
+     */
+    private void doDealContentLocation(List<String> copyBoundaryParts, Map<String, String> boundaryMaps) {
+
+        Iterator<String> iterator = copyBoundaryParts.iterator();
+        while (iterator.hasNext()) {
+            String part = iterator.next();
+            String[] all = part.split(CONTENT_LOCATION_REGEX);
+            if (all.length == 0 || all.length == 1) {
+                log.warn("{}不存在Content-Location,将不放入boundaryMaps集合");
+            } else {
+
+                try {
+                    String location = getLocation(part);
+                    if (!StringUtils.deleteWhitespace(location).startsWith("http://")) {
+                        String content = reductionContent(part);
+                        boundaryMaps.put(location, content);
+                        iterator.remove();
+                    }
+                } catch (Exception e) {
+                    log.warn("{}获取Content-Location异常,将不放入boundaryMaps集合。异常为：{}", part, e);
+                }
+            }
+        }
+
+    }
+
+    /**
+     * 遍历{@code copyBoundaryParts}的内容，寻找到所有存在着Content-ID的part，放入{@code boundaryMaps}里
+     *
+     * @param copyBoundaryParts mhtml的内容集合
+     * @param boundaryMaps      key为Content-ID、Content-Location，value为内容的map
+     */
+    private void doDealContentId(List<String> copyBoundaryParts, Map<String, String> boundaryMaps) {
+
+        Iterator<String> iterator = copyBoundaryParts.iterator();
+        while (iterator.hasNext()) {
+            String part = iterator.next();
+            String[] all = part.split(CONTENT_ID);
+            if (all.length == 1) {
+                log.warn("{}不存在Content-ID,将不放入boundaryMaps集合");
+            } else {
+
+                try {
+                    String contentID = getContentID(part);
+                    String content = reductionContent(part);
+                    boundaryMaps.put(contentID, content);
+                    iterator.remove();
+                } catch (Exception e) {
+                    log.warn("{}获取Content-ID异常,将不放入boundaryMaps集合。异常为：{}", part, e);
+                }
+
+
+            }
+
+        }
+
+
+    }
+
+    /**
+     * 从{@ccode part}里提取Content-ID的值
+     *
+     * @param part
+     * @return
+     */
+    private String getContentID(String part) throws Exception {
+
+
+        Matcher matcher = contentId.matcher(part);
+
+        String contentId = null;
+
+        while (matcher.find()) {
+
+            if (StringUtils.isBlank(contentId)) {
+                contentId = matcher.group();
+            } else {
+                throw new RuntimeException(String.format("%s 非规范的mhtml文件,发现多个符合条件的Content-ID"));
+            }
+
+        }
+
+        if (StringUtils.isBlank(contentId)) {
+            throw new Exception(String.format("%s 非规范的mhtml文件,未发现符合条件的Content-ID"));
+        }
+
+        //处理content——ID,截取内容
+        contentId = StringUtils.deleteWhitespace(contentId.split("\\:")[1]);
+        //处理content-id 去掉内容里的\\<和\\>
+        if (contentId.startsWith("<") && contentId.endsWith(">")) {
+
+            contentId = contentId.substring(contentId.indexOf("<") + 1, contentId.lastIndexOf(">"));
+        }
+
+        return contentId;
+
 
     }
 

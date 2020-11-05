@@ -5,7 +5,7 @@ import org.apache.commons.codec.net.QuotedPrintableCodec;
 import org.apache.commons.lang3.StringUtils;
 
 /**
- * @author ：wangsiliang
+ * @author ：feiyu
  * @date ：Created in 2020/11/4 20:58
  * @description：IMhtml的加密枚举类
  * @modified By：
@@ -15,7 +15,7 @@ public enum IMhtmlScretEnum {
 
     QUOTED_PRINTABLE("quoted-printable", QuotedPrintableCodec.class,
             "decodeQuotedPrintable"),
-    BASE_64("base64", Base64.class, "decode");
+    BASE_64("base64", Base64.class, "decodeBase64");
 
     /**
      * 文档加密类型

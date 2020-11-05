@@ -1,7 +1,7 @@
 package marray.top.mhtml.Enum;
 
 /**
- * @author ：wangsiliang
+ * @author ：feiyu
  * @date ：Created in 2020/11/4 19:32
  * @description：mhtml格式的内容枚举类
  * @modified By：
